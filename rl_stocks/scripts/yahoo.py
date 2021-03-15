@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import pandas as pd
 import numpy as np
+import datetime
 import yfinance as yf
 
 
@@ -8,7 +9,7 @@ class Yahoo():
     """
     Implements Yahoo connection and methods to get the stocks data
 
-    param window: date period or date window to download. Like (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)
+    param period: date period or date window to download. Like (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)
     param stock:  stock ticket
     param start_date: the start date the user want to train
     param end_date: the final date the user want to train
@@ -17,7 +18,7 @@ class Yahoo():
     yfinance: https://github.com/ranaroussi/yfinance
     """
     def __init__(self, window, stock, start_date, end_date, interval):
-        self.WINDOW   = window
+        self.PERIOD   = window
         self.STOCK    = stock
         self.START    = start_date
         self.END      = end_date
@@ -26,8 +27,7 @@ class Yahoo():
 
     def getInfo(self):
         "Get stock information"
-        self.ystock = yf.Ticker(self.STOCK)
-        self.data = self.ystock.history(start=self.START, end=self.END, interval=self.INTERVAL)
+        self.data = yf.download(self.STOCK, start=self.START, end=self.END, interval=self.INTERVAL)
         return self.data
 
     def getStockInfo(self, key):
