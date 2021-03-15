@@ -1,0 +1,9 @@
+gym
+tqdm
+numpy
+pandas
+matplotlib
+yfinance
+argparse
+stable-baselines3
+pillow==8.0

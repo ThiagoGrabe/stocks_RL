@@ -11,6 +11,8 @@ import datetime
 
 from stable_baselines3.common.env_checker import check_env
 
+from stable_baselines3 import DQN as DDQN
+
 from rl_stocks.envs.StocksRL import StocksRL
 from yahoo import Yahoo
 
@@ -68,7 +70,7 @@ if __name__ == '__main__':
 
     # Setting the start and end date
     START_DATE = datetime.datetime.strptime(date_time_str, '%d-%m-%Y')
-    END_DATE   = START_DATE + datetime.timedelta(days=WINDOW)
+    END_DATE   = START_DATE + datetime.timedelta(days=WINDOW) # Should be date just like start date
 
     # Create the Yahoo class and get the stock prices ('Close')
     myStock = Yahoo(window=WINDOW, stock=STOCK, start_date=START_DATE, end_date=END_DATE, interval=INTERVAL)
