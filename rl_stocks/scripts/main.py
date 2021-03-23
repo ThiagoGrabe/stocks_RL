@@ -1,20 +1,20 @@
 
-import gym
-from gym import error, spaces, utils
-from gym.utils import seeding
+# Standard Libraries
 import os
 import argparse
+import datetime
+
+# Third parties libraries
+import gym
 import numpy as np
 import pandas as pd
-import datetime
+from yahoo import Yahoo
 import matplotlib.pyplot as plt
-
-from stable_baselines3.common.env_checker import check_env
-
 from stable_baselines3 import DQN as DDQN
 
+# Personal Code
 from rl_stocks.envs.StocksRL import StocksRL
-from yahoo import Yahoo
+
 
 #######################################################
 ################# PARSE ARGUMENTS #####################
@@ -23,9 +23,7 @@ def getArgs():
     "Set all arguments."
     parser = argparse.ArgumentParser(prog='PROG', description="Reinforcement Learning Stock Prices - Peter Gunnarsson Project")
 
-    parser.add_argument("-s", '--stock', required=False, type=str, help="Stock to be analysed.\n")
-
-    parser.add_argument("-l", '--length', required=False, type=str, help="State length to be analysed.\n")
+    parser.add_argument("-s", '--stock', required=True, type=str, help="Stock to be analysed.\n")
 
     parser.add_argument("-i", '--interval', required=False, type=str, help="Interval to be analysed.\n")
 
@@ -34,6 +32,14 @@ def getArgs():
     parser.add_argument("-start", '--start_date',required=False, type=str, help="Start date to run the RL algorithm\n")
 
     parser.add_argument("-end", '--end_date',required=False, type=str, help="End date to run the RL algorithm\n")
+
+    parser.add_argument("-a", '--trade_amount', required=True, type=float, help="Amount of money to be traded.\n")
+
+    parser.add_argument("-w", '--wallet', required=False, type=float, help="Amount of money in the wallet.\n")
+
+    parser.add_argument("-k", '--key', required=True, type=str, help="Dataframe key to use.\n")
+
+    parser.add_argument("-d", '--dataset', required=True, type=str, help="Dataset to be used.\n")
 
     # parser.add_argument("-a", '--algorithm',required=False, type=str, help="Algorithm to be used.\n")
 
@@ -58,15 +64,18 @@ if __name__ == '__main__':
     args = getArgs()
 
     # Set all arguments
-    STOCK       = args['stock'] # stock ticket
+    STOCK          = args['stock'] # stock ticket
+    KEY            = args['key'] # stock ticket
+    DATASET        = args['dataset']
     
     # Start date
-    START_DATE   = args['start_date'] # start date (yyyy-mm-dd)
-    END_DATE = args['end_date'] # end date (yyyy-mm-dd)
+    START_DATE     = args['start_date'] # start date (yyyy-mm-dd)
+    END_DATE       = args['end_date'] # end date (yyyy-mm-dd)
 
-    WINDOW      = int(args['period']) # number (int) of days from start date
-    INTERVAL    = args['interval'] # data interval for stock values
-    STATE_LEN   = int(args['length']) # state len. It defines the NN input
+    WINDOW         = int(args['period']) # number (int) of days from start date
+    INTERVAL       = args['interval'] # data interval for stock values
+    TRADE_AMOUNT   = int(args['trade_amount'])
+    WALLET         = int(args['wallet'])
 
     # # Setting the start and end date
     START_DATE = datetime.datetime.strptime(START_DATE, '%Y-%m-%d')
@@ -74,20 +83,25 @@ if __name__ == '__main__':
     
 
     # Create the Yahoo class and get the stock prices ('Close')
-    myStock = Yahoo(window=WINDOW, stock=STOCK, start_date=START_DATE, end_date=END_DATE, interval=INTERVAL)
-    myStockPrices = myStock.getStockInfo(key='Close')
+    # myStock = Yahoo(window=WINDOW, stock=STOCK, start_date=START_DATE, end_date=END_DATE, interval=INTERVAL)
+    # myStockPrices = myStock.getStockInfo(key='Close')
+
+    myStockPrices = pd.read_csv(file_dir+'/.data/'+str(DATASET))
+    myStockPrices.fillna(method='bfill', inplace=True)
 
     # Stable Baselines obs and action information
-    N_DISCRETE_ACTIONS = [0,1,2] # Buy, Sell or Hold
-    OBSERVATION_SPACE  = STATE_LEN # Time interval to keep NN entry constant
+    N_DISCRETE_ACTIONS = [0, 1, 2] # Short, Flat, Long
+    OBSERVATION_SPACE  = len(myStockPrices.select_dtypes(include=['float']).iloc[0].values) # Time interval to keep NN entry constant
 
     # Instantiate the gym env
     env = gym.make('rl_stocks-v0')
     env = StocksRL()
-    env._reset(actions=N_DISCRETE_ACTIONS, observation_space=OBSERVATION_SPACE, data=myStockPrices)
+    env._reset(actions=N_DISCRETE_ACTIONS, observation_space=OBSERVATION_SPACE, data=myStockPrices, 
+               trade_amount=TRADE_AMOUNT, key=KEY, wallet=WALLET, window=WINDOW)
     
-    model = DDQN("MlpPolicy", env, verbose=1, device='cuda', tensorboard_log=tensorboard_log)
-    model.learn(total_timesteps=3000, log_interval=4)
+    training_timesteps = len(myStockPrices)-WINDOW-1
+    model = DDQN("MlpPolicy", env, verbose=0, device='cuda', tensorboard_log=tensorboard_log)
+    model.learn(total_timesteps=training_timesteps, log_interval=4)
 
     print('Done')
 
