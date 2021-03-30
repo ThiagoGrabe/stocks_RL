@@ -1,8 +1,11 @@
 # Standard Libraries
 import random
 import math
+import pickle
+import csv
 
 # Third parties libraries
+import gym
 from gym import spaces
 from gym.utils import seeding
 from gym import spaces
@@ -29,14 +32,26 @@ class StocksRL(gym.Env):
         super(StocksRL, self).__init__()
 
         
-    def _reset(self, actions, observation_space, data, key, trade_amount=1e3, wallet=1e5, window=7):
+    def _reset(self, 
+                actions, 
+                observation_space, 
+                data, 
+                key, 
+                log_dir, 
+                trade_amount=1e3, 
+                wallet=1e5, 
+                window=7, 
+                interest_rate=-0.001):
+
+
         self.N_DISCRETE_ACTIONS = actions
         self.OBS                = observation_space
 
         self.trade_amount       = trade_amount
-        self.wallet             = wallet # Change names to be comprehensive
-        self.full_wallet        = wallet
-        self.transaction_cost   = 0.1 # Hard coded as requested in the project requirements
+        self.wallet             = wallet # Change during simulation
+        self.full_wallet        = wallet # Base value
+        self.transaction_cost   = 0.01 # Hard coded as requested in the project requirements
+        self.interest_rate      = interest_rate
         
         self.data               = data
         self.number_stocks      = 0
@@ -45,18 +60,29 @@ class StocksRL(gym.Env):
         self.transaction_history= dict()
 
         self.index              = 0
+        self.episode            = 1
         self.window             = window
         self.key                = key
         self.game_status        = True
         self.state              = 'Flat'
         self.terminate          = False
+        self.log_dir            = log_dir
 
         self.action_space       = spaces.Discrete(len(self.N_DISCRETE_ACTIONS))
         self.observation_space  = spaces.Box(low=0, high=float('inf'),
-                                        shape=(self.window, self.OBS,), dtype=np.float32)
+                                        shape=(self.window, self.OBS), dtype=np.float32)
+
+        # Logging Lists
+        self.log_state       = []
+        self.log_idx         = []
+        self.log_qty_stocks  = []
+        self.log_trade_cost  = []
+        self.log_stock_price = []
+        self.log_reward      = []
+        self.log_action      = []
+        self.log_profit      = []
 
     def reset(self):
-        self.done = False
         # print('Starting new episode...\n')
         return self.perception()
     
@@ -65,9 +91,16 @@ class StocksRL(gym.Env):
         self.reward         = self._reward(action)
         self.info           = {}
         self.index          += 1
-        self.obs            = self.perception()
+        self.perception()
         # print('Action: ', self.current_action, 'Reward: ', self.reward)
-        return self.obs, self.reward, self.terminate, self.info
+
+        if self.terminate:
+            path_ = self.log_dir+"/log.npz"
+            np.savez(path_, Index=self.log_idx, State=self.log_state, QtyStocks=self.log_qty_stocks, TradeCost=self.log_trade_cost, StockPrice=self.log_stock_price, Profit=self.log_profit)
+            self.episode += 1
+            return self.obs, self.reward, self.terminate, self.info
+        else:
+            return self.obs, self.reward, self.terminate, self.info
     
     def render(self, mode='human'):
         print('render function')
@@ -84,30 +117,39 @@ class StocksRL(gym.Env):
        [1.3010000e+02, 1.3032000e+02, 1.2906000e+02, 1.2931000e+02,
         2.7054142e+07]])
         '''
-        try:
-            obs = self.data.select_dtypes(include=['float']).iloc[self.index:self.index+self.window].values
-        except:
-            self.terminate = True
-        return obs
+        self.obs = self.data.iloc[self.index:self.index+self.window, 7:].values
+
+        if self.obs.shape != (self.window, self.OBS):
+
+            self.obs = np.concatenate((self.obs, np.zeros((abs(self.window-self.obs.shape[0]), self.OBS))))
+        assert self.obs.shape == (self.window, self.OBS)
+        # print(self.obs.shape)
+        # print(self.obs)
+        return self.obs
 
     def _trade(self):
 
         if (self.state == 'Go Short' or self.state == 'Go Long') and self.number_stocks == 0:
-            # First Buy
-            self.current_stock_price = self.data[self.key].iloc[self.index+self.window]
+            # First Trade
+            self.current_stock_price = self.data[self.key].iloc[min(self.index+self.window-1, len(self.data))]
             self.history_stock_price = self.current_stock_price
             self.number_stocks       = math.floor(self.trade_amount/self.current_stock_price) # Can't buy half stock
             self.actual_trade_cost   = self.number_stocks*self.current_stock_price*(1+self.transaction_cost)
             
             if self.wallet > self.actual_trade_cost:
                 self.wallet              -= self.actual_trade_cost
-                self.transaction_history.clear()
                 self.transaction_history = {'State': self.state,
-                                            'When':self.index+self.window,
+                                            'When':min(self.index+self.window-1, len(self.data)),
                                             'Qty Stocks': self.number_stocks,
                                             'Trade Cost': self.actual_trade_cost,
                                             'Stock Price': self.current_stock_price}
-                self.logging[self.index+self.window] = self.transaction_history
+                self.log_state.append(self.state)
+                self.log_idx.append(min(self.index+self.window-1, len(self.data)))
+                self.log_qty_stocks.append(self.number_stocks)
+                self.log_trade_cost.append(self.actual_trade_cost)
+                self.log_stock_price.append(self.current_stock_price)
+                self.log_profit.append(0)
+                self.terminate = False
             else:
                 # print('Trade cost higher than wallet at index:', self.index+self.window)
                 self.terminate = True
@@ -116,77 +158,106 @@ class StocksRL(gym.Env):
 
         elif (self.state == 'Go Short' or self.state == 'Go Long') and self.number_stocks != 0:
             # Coming from Go Short/Go Long. We sell the stocks, take profit and buy again in go short/go long state.
-            self.current_stock_price = self.data[self.key].iloc[self.index+self.window]
+            self.current_stock_price = self.data[self.key].iloc[min(self.index+self.window-1, len(self.data))]
             self.history_stock_price = float(self.transaction_history['Stock Price'])
             self.number_stocks_sell  = int(self.transaction_history['Qty Stocks'])
-            self.profit              = self.number_stocks_sell * (self.current_stock_price - self.history_stock_price) *(1+self.transaction_cost)
-
+            self.profit              = self.number_stocks_sell * (self.current_stock_price - self.history_stock_price) * (1+self.transaction_cost)
+            self.number_stocks       -= self.number_stocks_sell
             self.wallet              += self.profit
 
             # After selling, let's start short/long!
-            self.number_stocks       = math.floor(self.trade_amount/self.current_stock_price) # Can't buy half stock
+            self.number_stocks       += math.floor(self.trade_amount/self.current_stock_price) # Can't buy half stock
             self.actual_trade_cost   = self.number_stocks*self.current_stock_price*(1+self.transaction_cost)
             
             if self.wallet > self.actual_trade_cost:
                 self.wallet              -= self.actual_trade_cost
-                self.transaction_history.clear()
                 self.transaction_history = {'State': self.state,
-                                            'When':self.index+self.window,
+                                            'When':min(self.index+self.window-1, len(self.data)),
                                             'Qty Stocks': self.number_stocks,
                                             'Trade Cost': self.actual_trade_cost,
                                             'Stock Price': self.current_stock_price}
-                self.logging[self.index+self.window] = self.transaction_history
+                self.log_state.append(self.state)
+                self.log_idx.append(min(self.index+self.window-1, len(self.data)))
+                self.log_qty_stocks.append(self.number_stocks)
+                self.log_trade_cost.append(self.actual_trade_cost)
+                self.log_stock_price.append(self.current_stock_price)
+                self.log_profit.append(self.profit)
+                self.terminate = False
             else:
-                # print('Trade cost higher than wallet at index:', self.index+self.window)
                 self.terminate = True
                 self.wallet    = self.full_wallet
                 return 0
 
         elif self.state == 'Flat' and self.number_stocks > 0:
             # Sell and take profit
-            self.current_stock_price = self.data[self.key].iloc[self.index+self.window]
+            self.current_stock_price = self.data[self.key].iloc[min(self.index+self.window-1, len(self.data))]
             self.history_stock_price = float(self.transaction_history['Stock Price'])
             self.number_stocks_sell  = int(self.transaction_history['Qty Stocks'])
             self.profit              = self.number_stocks_sell * (self.current_stock_price - self.history_stock_price) *(1+self.transaction_cost)
+            self.number_stocks       -= self.number_stocks_sell
 
             self.wallet              += self.profit
+
+            self.log_state.append(self.state)
+            self.log_idx.append(min(self.index+self.window-1, len(self.data)))
+            self.log_qty_stocks.append(self.number_stocks_sell)
+            self.log_trade_cost.append(0)
+            self.log_stock_price.append(self.current_stock_price)
+            self.log_profit.append(self.profit)
+            self.terminate = True
+            self.wallet   = self.full_wallet
         else:
-            print('State/Condition not found!', self.state)
+            # print('State/Condition not found!', self.state)
+            self.log_state.append(self.state)
+            self.log_idx.append(min(self.index+self.window-1, len(self.data)))
+            self.log_qty_stocks.append(0)
+            self.log_trade_cost.append(0)
+            self.log_stock_price.append(self.data[self.key].iloc[min(self.index+self.window-1, len(self.data))])
+            self.log_profit.append(0)
             return 
 
     def _action(self, action):
 
-        if action == 0 and self.state == 'Flat':
+        # [0, 1, 2] # Short, Flat, Long - Reminder!
+
+        self.log_action.append(action)
+
+        if action == 1 and self.state == 'Flat':
+            self._trade()
             return self.state
         
-        elif action == 0 and self.state != 'Flat':
+        elif action == 1 and self.state != 'Flat':
             self.state = 'Flat'
             self._trade()
+            return self.state
 
-        elif action == 1 and self.state != 'Go Short':
+        elif action == 0 and self.state != 'Go Short':
             self.state = 'Go Short'
             self._trade()
-            
+            return self.state
 
         elif action == 2 and self.state != 'Go Long':
             self.state = 'Go Long'
             self._trade()
+            return self.state
 
         else:
             return self.state
 
     def _reward(self, action):
-        if self.state != 'Flat' and self.number_stocks > 0:
+        if  self.number_stocks > 0:
             curr  = self.current_stock_price
             entry = self.history_stock_price # Can open, close and it is an arguement
             pos   = action-1
             tc    = self.trade_amount * self.transaction_cost
 
-            self.done = True
-
-            return ((((curr-entry)/entry)*pos)*self.trade_amount)
+            self.reward = ((((curr-entry)/entry)*pos)*self.trade_amount)
+            self.log_reward.append(self.reward)
+            return self.reward
         else:
-            return -0.001
+            self.reward = self.interest_rate
+            # self.log_reward.append(self.reward)
+            return self.reward
 
 
 
